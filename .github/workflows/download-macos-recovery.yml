@@ -1,0 +1,65 @@
+name: Download macOS 12 (Monterey) recovery
+
+# Dortania "Making the installer in Windows" の
+#   py macrecovery.py -b Mac-FFE5EF870D7BA81A -m 00000000000000000 download   # Monterey (12)
+# をGitHub Actions上で実行し、com.apple.recovery.boot をReleaseに添付します。
+# BaseSystem.dmg はGitの100MB制限を超えるため、リポジトリ直下ではなくReleaseに置きます。
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/download-macos-recovery.yml'
+
+permissions:
+  contents: write
+
+env:
+  OC_VERSION: "1.0.8"
+  RELEASE_TAG: "recovery-macos12-monterey"
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Get macrecovery.py from OpenCorePkg
+        run: |
+          curl -fsSL -o oc.zip "https://github.com/acidanthera/OpenCorePkg/releases/download/${OC_VERSION}/OpenCore-${OC_VERSION}-RELEASE.zip"
+          unzip -q oc.zip 'Utilities/macrecovery/*' -d oc
+          ls -la oc/Utilities/macrecovery
+
+      - name: Download macOS 12 Monterey recovery
+        working-directory: oc/Utilities/macrecovery
+        run: |
+          python3 macrecovery.py -b Mac-FFE5EF870D7BA81A -m 00000000000000000 download
+          ls -laR com.apple.recovery.boot
+
+      - name: Verify and package
+        run: |
+          set -e
+          cd oc/Utilities/macrecovery
+          test -s com.apple.recovery.boot/BaseSystem.dmg
+          test -s com.apple.recovery.boot/BaseSystem.chunklist
+          sha256sum com.apple.recovery.boot/*
+          zip -r "$GITHUB_WORKSPACE/com.apple.recovery.boot.zip" com.apple.recovery.boot
+          ls -la "$GITHUB_WORKSPACE/com.apple.recovery.boot.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: com.apple.recovery.boot
+          path: oc/Utilities/macrecovery/com.apple.recovery.boot/
+          if-no-files-found: error
+
+      - name: Publish as GitHub Release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create "$RELEASE_TAG" com.apple.recovery.boot.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "macOS 12 Monterey recovery (com.apple.recovery.boot)" \
+            --notes "macrecovery.py (OpenCorePkg ${OC_VERSION}) で取得した macOS 12 Monterey のリカバリ。zipを展開した com.apple.recovery.boot フォルダをUSBのルートに置いてください。"
